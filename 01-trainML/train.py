@@ -11,15 +11,16 @@ import warnings
 import pandas as pd
 import numpy as np
 
-from prefect import flow, task
 from prefect import task, flow
 from prefect.logging import get_run_logger
 from prefect.artifacts import create_table_artifact, create_link_artifact
+from prefect_aws import AwsCredentials
+
+import boto3
+from botocore.exceptions import BotoCoreError, NoCredentialsError
 
 import pyarrow.parquet as pq
 from io import BytesIO
-import boto3
-from botocore.exceptions import BotoCoreError, NoCredentialsError
 
 import mlflow
 from mlflow.models.signature import infer_signature
@@ -35,7 +36,15 @@ from sklearn.model_selection import RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.linear_model import LinearRegression, Ridge, Lasso
-from xgboost import XGBRegressor
+from xgboost import XGBRegressor    
+
+
+################################################################################
+#                                  Preâmbulo                                   #
+################################################################################
+#--------------------------------------End-------------------------------------#
+
+
 
 
 
@@ -100,73 +109,53 @@ def configure_mlflow(exp_name: str,
     return parent_run_id
 
 
-
-################################################################################
-#                                  Preâmbulo                                   #
-################################################################################
-#--------------------------------------End-------------------------------------#
-
-
-
-
-
 ################################################################################
 #                                Data Ingestion                                #
 ################################################################################
 #------------------------------------Begin ------------------------------------#
 
-# Inicializa o cliente S3
-s3_client = boto3.client("s3")
 
 @task(retries=5, retry_delay_seconds=3, log_prints=True)
-def aws_fetch_data(taxi_type : str,
-                   date: str, 
-                   bucket_name: str, 
-                   s3bucket_dataset_folder: str):
-    """
-    Busca os dados de treino e teste no S3 e os carrega na memória como objetos binários.
+async def aws_fetch_data(taxi_type: str,
+                         date: str,
+                         bucket_name: str,
+                         s3bucket_dataset_folder: str):
 
-    Args:
-        date (str): Data no formato 'YYYY-MM-DD'.
-        bucket_name (str): Nome do bucket S3.
+    aws_credentials_block = await AwsCredentials.load("aws-s3-creds")
+    session = aws_credentials_block.get_boto3_session()
+    s3_client = session.client('s3')
 
-    Returns:
-        tuple: Conteúdo dos arquivos de treino e teste como bytes.
-    """    
     processed_date = datetime.strptime(date, "%Y-%m-%d")
     time.sleep(5)  # Simula tempo de espera
 
-    # Determina as datas dos arquivos de treino (mês atual) e teste (mês subsequente)
     train_date = processed_date
     test_date = processed_date + relativedelta(months=1)
 
-    # Gera os nomes dos arquivos baseados na data fornecida
     train_file = f"{taxi_type}_tripdata_{train_date.year}-{str(train_date.month).zfill(2)}.parquet"
     test_file = f"{taxi_type}_tripdata_{test_date.year}-{str(test_date.month).zfill(2)}.parquet"
 
-    # Lista para armazenar os arquivos carregados
     files_content = []
 
     for file in [train_file, test_file]:
-        s3_key = f"{s3bucket_dataset_folder}/{file}"  # Caminho dentro do S3
-        
+        s3_key = f"{s3bucket_dataset_folder}/{file}"
+
         try:
-            # Baixando diretamente para a memória
             file_obj = BytesIO()
             s3_client.download_fileobj(bucket_name, s3_key, file_obj)
-            file_obj.seek(0)  # Retorna ao início do arquivo
+            file_obj.seek(0)
 
             print(f"Arquivo {file} carregado na memória com sucesso!")
-            files_content.append(file_obj.read())  # Retorna os dados como bytes
+            files_content.append(file_obj.read())
 
         except NoCredentialsError:
-            print("Erro: Credenciais da AWS não encontradas. Configure com `aws configure`.")
+            print("Erro: Credenciais da AWS não encontradas.")
             raise
         except BotoCoreError as e:
             print(f"Erro ao baixar o arquivo {file} do S3: {e}")
             raise
 
-    return tuple(files_content)  # Retorna os arquivos como bytes
+    return tuple(files_content)
+
 
 
 @task(log_prints=True)
@@ -421,7 +410,6 @@ def train_model(model, hyperparams_grid , random_search_params, X_train, y_train
 
 @task(log_prints=True)
 def objective(
-    exp_name,
     model_name,
     best_model,
     best_params,
@@ -550,6 +538,11 @@ def pipTrain(exp_name,
     """
     logger = get_run_logger()
 
+    aws_credentials_block = AwsCredentials.load("aws-s3-creds")
+    os.environ["AWS_ACCESS_KEY_ID"] = aws_credentials_block.aws_access_key_id
+    os.environ["AWS_SECRET_ACCESS_KEY"] = aws_credentials_block.aws_secret_access_key.get_secret_value()
+
+
     parent_run_id = configure_mlflow(exp_name, s3bucket_name, s3bucket_mlflow_artifact_folder)  # Criar uma run pai
 
     # Criar run filha para o pré-processador dentro da run pai
@@ -586,7 +579,6 @@ def pipTrain(exp_name,
             # Criar uma run filha para cada modelo dentro da run pai
             with mlflow.start_run(nested=True):  
                 objective(
-                    exp_name=exp_name,
                     model_name=model_name,
                     best_model=best_model,
                     best_params=best_hp,
@@ -621,28 +613,27 @@ def pipTrain(exp_name,
 #-----------------------------------Begin--------------------------------------#
 
 
-
 @flow(log_prints=True)
-def main_flow(exp_name : str = None,
-              taxi_type : str = None,
-              date: str = None, 
-              s3bucket_name: str = None, 
-              s3bucket_dataset_folder: str = None,
-              s3bucket_mlflow_artifact_folder : str = None):
+async def main_flow(exp_name : str = None,
+                    taxi_type : str = None,
+                    date: str = None, 
+                    s3bucket_name: str = None, 
+                    s3bucket_dataset_folder: str = None,
+                    s3bucket_mlflow_artifact_folder : str = None):
     """
     Fluxo principal que treina modelos com base em dados dinâmicos por data.
-
-    Args:
-        date (str): Data no formato 'YYYY-MM-DD'.
     """
     logger = get_run_logger()
 
-    # Definindo a data padrão como hoje, se não fornecida
     if date is None:
         date = datetime.today().strftime("%Y-%m-%d")
 
-    # Obtendo os dados parquet para treino e teste (serão convertidos diretamente para DataFrame)
-    train_raw_file, test_raw_file = aws_fetch_data(taxi_type, date, s3bucket_name, s3bucket_dataset_folder)
+    train_raw_file, test_raw_file = await aws_fetch_data(
+        taxi_type, 
+        date, 
+        s3bucket_name, 
+        s3bucket_dataset_folder
+    )
     logger.info(f"🎲 Dados de treino e teste obtidos como DataFrame.")
 
     # Limpeza e carregamento dos conjuntos de dados
@@ -727,14 +718,19 @@ def main_flow(exp_name : str = None,
 
     print(f"Fluxo principal concluído para a data: {date}")
 
+'''
+if __name__ == "__main__":
+    import asyncio
 
-main_flow(exp_name = 'nyc-green-taxi-2024-01',
-          taxi_type = 'green', 
-          date = '2024-01-01', 
-          s3bucket_name = 'mlflow-cloud-artifacts',
-          s3bucket_dataset_folder = 'nyc-trip-data',
-          s3bucket_mlflow_artifact_folder = 'nyc-mlflow-artifacts')
-
+    asyncio.run(main_flow(
+        exp_name='nyc-green-taxi-2024-01',
+        taxi_type='green',
+        date='2024-01-01',
+        s3bucket_name='mlflow-cloud-artifacts',
+        s3bucket_dataset_folder='nyc-trip-data',
+        s3bucket_mlflow_artifact_folder='nyc-mlflow-artifacts'
+    ))
+'''
 
 ################################################################################
 #                           Apply Full Pipeline                                #
