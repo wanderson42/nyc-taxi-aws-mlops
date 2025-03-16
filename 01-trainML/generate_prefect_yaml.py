@@ -18,15 +18,6 @@ with open('prefect.yaml', 'w') as f:
 name: flows
 prefect-version: 3.2.11
 
-build:
-  - prefect_docker.deployments.steps.build_docker_image:
-      id: build-image
-      requires: prefect-docker>=0.4.0
-      image_name: '{{{{ $PREFECT_IMAGE_NAME }}}}'
-      tag: {os.getenv('TAG', 'latest')}
-      dockerfile: Dockerfile
-      platform: linux/amd64
-
 push:
   - prefect_aws.deployments.steps.push_to_s3:
       id: push_code
@@ -47,8 +38,7 @@ definitions:
   work_pool:
     name: {POOL}
     job_variables:
-      image: '{{{{ build-image.image }}}}'
+      image: {IMAGE_NAME}
 
 deployments: []
 """)
-    print("Arquivo prefect.yaml gerado com sucesso!")
