@@ -12,7 +12,7 @@ ENTRYPOINT = train.py:main_flow
 DEPLOYMENT_NAME = train-nyc
 TIMEZONE = America/Sao_Paulo
 POOL = minikube-workpool
-IMAGE_NAME ?= wanderson/nyc-taxi-flow  
+IMAGE_NAME ?= wlf42/nyc-taxi-flow:latest  
 
 # Função para gerar o prefect.yaml
 generate-prefect-yaml:
