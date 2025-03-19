@@ -4,7 +4,7 @@
 
 You need following tools installed:
 - `docker`
-- `docker-compose` (included to Docker Desktop for Mac and Docker Desktop for Windows )
+- `docker-compose` (included to Docker Desktop for Mac and Docker Desktop for Windows)
 
 ## Preparation
 
