@@ -13,13 +13,6 @@ TIMEZONE = os.getenv('TIMEZONE', 'America/Sao_Paulo')
 POOL = os.getenv('POOL', 'minikube-workpool')
 IMAGE_NAME = os.getenv('IMAGE_NAME', 'wlf42/nyc-taxi-flow:latest')
 
-# Função para garantir que a imagem mais recente seja puxada
-def pull_latest_image():
-    print(f"Puxando a imagem mais recente: {IMAGE_NAME}...")
-    subprocess.run(['docker', 'pull', IMAGE_NAME], check=True)
-
-pull_latest_image()
-
 # Criando o arquivo prefect.yaml
 with open('prefect.yaml', 'w') as f:
     f.write(f"""
