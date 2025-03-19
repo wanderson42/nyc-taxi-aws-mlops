@@ -1,4 +1,4 @@
-# Monitoring example
+# Monitoring Example
 
 ## Prerequisites
 
